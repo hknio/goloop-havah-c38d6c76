@@ -5,7 +5,9 @@ plugins {
 
 sonarqube {
     properties {
-        property 'sonar.projectName', 'Goloop'
+        property 'sonar.projectKey', 'hknio_goloop-havah-c38d6c76'
+        property 'sonar.organization', 'hknio'
+        property 'sonar.host.url', 'https://sonarcloud.io'
     }
 }
 
