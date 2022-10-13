@@ -2,9 +2,15 @@ import java.util.concurrent.TimeUnit
 
 allprojects {
     apply plugin: 'java'
+    apply plugin: 'maven-publish'
 
     repositories {
         mavenCentral()
+        jcenter()
+        maven {
+            url = uri('https://repo.maven.apache.org/maven2/')
+        }
+        //googleMaven()
     }
 }
 
@@ -30,8 +36,14 @@ dependencies {
     implementation project(':rt')
     implementation project(':tooling')
     implementation project(':samples')
-    testImplementation "org.junit.jupiter:junit-jupiter:5.4.2"
-    testRuntime "org.junit.jupiter:junit-jupiter-engine:5.4.2"
+    //testImplementation "org.junit.jupiter:junit-jupiter:5.9.0"
+    //implementation 'org.junit.jupiter:junit-jupiter:5.9.0'
+    //testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.9.0"
+
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.9.0'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.9.0'
+    testImplementation 'com.code-intelligence:jazzer-junit:0.12.0'
+
     testImplementation files(project(':rt').sourceSets.test.output)
 }
 
@@ -51,65 +63,73 @@ class ChainTest extends Test {
     Process process = null
 
     void startServer() {
-        List<String> commands = new LinkedList<String>()
-        commands.add("../bin/gochain")
-        commands.add("--config")
-        commands.add(configFile)
-        commands.add("--chain_dir")
-        commands.add(chainDir)
-        if (gsFile != null) {
-            commands.add("--genesis_storage")
-            commands.add(gsFile)
-        } else if (gsDir != null) {
-            commands.add("--genesis")
-            commands.add(gsDir)
-        }
-        def logLevel = System.getProperty("LOG_LEVEL")
-        if (logLevel != null && logLevel.length() != 0) {
-            commands.add("--log_level=" + logLevel)
-        }
-
-        Runtime.getRuntime().exec("rm -rf " + chainDir)
-
-        ProcessBuilder pb = new ProcessBuilder(commands)
-
-        // adding PYTHONPATH for using pyee directly.
-        def env = pb.environment()
-        env.put("PYTHONPATH", "../pyee")
-
-        // set working directory
-        pb.directory(new File("."))
-
-        File log_file = new File(logFile)
-        pb.redirectError(log_file)
-        pb.redirectOutput(log_file)
-
-        process = pb.start()
-
-        // Hook shutdown for kill the process for sure
-        Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
-            void run() {
-                stopServer()
+        try {
+            List<String> commands = new LinkedList<String>()
+            commands.add("/Users/yb/work/hacken/goloop-havah-c38d6c76/bin/gochain")
+            commands.add("--config")
+            commands.add(configFile)
+            commands.add("--chain_dir")
+            commands.add(chainDir)
+            if (gsFile != null) {
+                commands.add("--genesis_storage")
+                commands.add(gsFile)
+            } else if (gsDir != null) {
+                commands.add("--genesis")
+                commands.add(gsDir)
             }
-        }))
+            def logLevel = System.getProperty("LOG_LEVEL")
+            if (logLevel != null && logLevel.length() != 0) {
+                commands.add("--log_level=" + logLevel)
+            }
+
+            Runtime.getRuntime().exec("rm -rf " + chainDir)
+
+            ProcessBuilder pb = new ProcessBuilder(commands)
+
+            // adding PYTHONPATH for using pyee directly.
+            def env = pb.environment()
+            env.put("PYTHONPATH", "../pyee")
+
+            // set working directory
+            pb.directory(new File("."))
+
+            File log_file = new File(logFile)
+            pb.redirectError(log_file)
+            pb.redirectOutput(log_file)
+
+            process = pb.start()
+
+            // Hook shutdown for kill the process for sure
+            Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
+                void run() {
+                    stopServer()
+                }
+            }))
+        } catch (Exception e) {
+            System.out.println("here we go", e)
+        }
     }
 
     void startDocker(String serverPort) {
-        List<String> commands = new LinkedList<String>()
-        commands.add("docker")
-        commands.add("run")
-        commands.add("-dit")
-        commands.add("-v")
-        commands.add(getWorkingDir().toString() + ":" + "/testsuite")
-        commands.add("-p")
-        commands.add("${serverPort}:${serverPort}")
-        commands.add("--env-file")
-        commands.add("data/dockerenv/" + dockerEnv)
-        commands.add("--name")
-        commands.add("gochain-" + dockerEnv)
-        commands.add("goloop/gochain")
-        process = commands.execute()
-        process.waitFor(1, TimeUnit.SECONDS)
+        try {
+            List<String> commands = new LinkedList<String>()
+            commands.add("docker")
+            commands.add("run")
+            commands.add("-dit")
+            commands.add("-v")
+            commands.add(getWorkingDir().toString() + ":" + "/testsuite")
+            commands.add("-p")
+            commands.add("${serverPort}:${serverPort}")
+            commands.add("--env-file")
+            commands.add("/Users/yb/work/hacken/goloop-havah-c38d6c76/testsuite/data/dockerenv/" + dockerEnv)
+            commands.add("--name")
+            commands.add("gochain-" + dockerEnv)
+            commands.add("goloop/gochain")
+            process = commands.execute()
+            process.waitFor(1, TimeUnit.SECONDS)
+        } catch (Exception e) {
+            System.out.println(e)
+        }
     }
 
     @TaskAction
@@ -138,6 +158,9 @@ class ChainTest extends Test {
         } else {
             systemProperty("CHAIN_ENV", System.getProperty("CHAIN_ENV"))
         }
+        Map envs = new HashMap();
+        envs.put("JAZZER_FUZZ", "1");
+        setEnvironment(envs)
         try {
             super.executeTests()
         } finally {
@@ -174,59 +197,59 @@ class ChainTest extends Test {
     }
 }
 
-task testPyGov(type: ChainTest, overwrite: true) {
-    useJUnitPlatform {
-        includeTags "pyGov"
-    }
-    def audit = System.getProperty("AUDIT")
-    if (audit == "true") {
-        configFile = "./data/config/pygov.json"
-        chainDir = ".chain/pyaudit"
-        logFile = ".chain/pyaudit.log"
-        gsDir = "./data/genesisStorage/genesis_audit.json"
-        envFile = "./data/chainenv/pygov.props"
-        dockerEnv = "pyaudit"
-    } else {
-        configFile = "./data/config/pygov.json"
-        chainDir = ".chain/pygov"
-        logFile = ".chain/pygov.log"
-        gsDir = "./data/genesisStorage/genesis_gov.json"
-        envFile = "./data/chainenv/pygov.props"
-        dockerEnv = "pygov"
-    }
-
-    dependsOn 'cleanTestPyGov'
-    testLogging.showStandardStreams = true
-}
-
-task testPyScore(type: ChainTest, overwrite: true) {
-    useJUnitPlatform {
-        includeTags "pyScore"
-    }
-    configFile = "./data/config/py.json"
-    chainDir = ".chain/pyscore"
-    logFile = ".chain/pyscore.log"
-    gsDir = "./data/genesisStorage/genesis_py.json"
-    envFile = "./data/chainenv/py.props"
-    dockerEnv = "pyscore"
-
-    dependsOn 'cleanTestPyScore'
-    testLogging.showStandardStreams = true
-
-    def forks = System.getProperty("FORKS")
-    if (forks != null && forks.isInteger()) {
-        maxParallelForks = Integer.valueOf(forks)
-    }
-}
+//task testPyGov(type: ChainTest, overwrite: true) {
+//    useJUnitPlatform {
+//        includeTags "pyGov"
+//    }
+//    def audit = System.getProperty("AUDIT")
+//    if (audit == "true") {
+//        configFile = "./data/config/pygov.json"
+//        chainDir = ".chain/pyaudit"
+//        logFile = ".chain/pyaudit.log"
+//        gsDir = "./data/genesisStorage/genesis_audit.json"
+//        envFile = "./data/chainenv/pygov.props"
+//        dockerEnv = "pyaudit"
+//    } else {
+//        configFile = "./data/config/pygov.json"
+//        chainDir = ".chain/pygov"
+//        logFile = ".chain/pygov.log"
+//        gsDir = "./data/genesisStorage/genesis_gov.json"
+//        envFile = "./data/chainenv/pygov.props"
+//        dockerEnv = "pygov"
+//    }
+//
+//    dependsOn 'cleanTestPyGov'
+//    testLogging.showStandardStreams = true
+//}
+//
+//task testPyScore(type: ChainTest, overwrite: true) {
+//    useJUnitPlatform {
+//        includeTags "pyScore"
+//    }
+//    configFile = "./data/config/py.json"
+//    chainDir = ".chain/pyscore"
+//    logFile = ".chain/pyscore.log"
+//    gsDir = "./data/genesisStorage/genesis_py.json"
+//    envFile = "./data/chainenv/py.props"
+//    dockerEnv = "pyscore"
+//
+//    dependsOn 'cleanTestPyScore'
+//    testLogging.showStandardStreams = true
+//
+//    def forks = System.getProperty("FORKS")
+//    if (forks != null && forks.isInteger()) {
+//        maxParallelForks = Integer.valueOf(forks)
+//    }
+//}
 
 task testJavaScore(type: ChainTest, overwrite: true) {
     useJUnitPlatform {
         includeTags "javaScore"
     }
-    configFile = "./data/config/java.json"
-    chainDir = ".chain/javascore"
-    logFile = ".chain/javascore.log"
-    envFile = "./data/chainenv/java.props"
+    configFile = "/Users/yb/work/hacken/goloop-havah-c38d6c76/testsuite/data/config/java.json"
+    chainDir = "/Users/yb/work/hacken/goloop-havah-c38d6c76/testsuite/.chain/javascore"
+    logFile = "/Users/yb/work/hacken/goloop-havah-c38d6c76/testsuite/.chain/javascore.log"
+    envFile = "/Users/yb/work/hacken/goloop-havah-c38d6c76/testsuite/data/chainenv/java.props"
     dockerEnv = "javascore"
 
     dependsOn 'cleanTestJavaScore'
@@ -249,5 +272,5 @@ task testJavaGov(type: ChainTest, overwrite: true) {
 }
 
 task test(overwrite: true) {
-    dependsOn 'testPyScore', 'testPyGov', 'testJavaScore', 'testJavaGov'
+    dependsOn 'testJavaScore', 'testJavaGov'
 }
