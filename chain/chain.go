@@ -77,6 +77,7 @@ type chainTask interface {
 type singleChain struct {
 	wallet module.Wallet
 
+	dbLock   sync.RWMutex
 	database db.Database
 	vld      module.CommitVoteSetDecoder
 	pd       module.PatchDecoder
@@ -307,6 +308,17 @@ func (c *singleChain) _transitOrTerminate(to State, err error, froms ...State) {
 	}
 }
 
+func (c *singleChain) _setStoppedFrom(froms ...State) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	if !c._transitInLock(Stopped, nil, froms...) {
+		c._handleTerminateInLock()
+	} else {
+		c.task = nil
+	}
+}
+
 func (c *singleChain) _transit(to State, err error, froms ...State) bool {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
@@ -369,6 +381,11 @@ func (c *singleChain) openDatabase(dbDir, dbType string) (db.Database, error) {
 }
 
 func (c *singleChain) ensureDatabase() {
+	c.dbLock.Lock()
+	defer c.dbLock.Unlock()
+	if c.database != nil {
+		return
+	}
 	chainDir := c.cfg.AbsBaseDir()
 	if err := c.prepareDatabase(chainDir); err != nil {
 		c.logger.Panicf("Fail to open database chainDir=%s err=%+v",
@@ -397,6 +414,8 @@ func (c *singleChain) prepareDatabase(chainDir string) error {
 }
 
 func (c *singleChain) releaseDatabase() {
+	c.dbLock.Lock()
+	defer c.dbLock.Unlock()
 	if c.database != nil {
 		c.database.Close()
 		c.database = nil
@@ -512,8 +531,7 @@ func (c *singleChain) _waitResultOf(task chainTask) error {
 	if result == nil {
 		c._transitOrTerminate(Finished, nil, Started, Stopping)
 	} else if errors.InterruptedError.Equals(result) {
-		c.task = nil
-		c._transitOrTerminate(Stopped, nil, Stopping)
+		c._setStoppedFrom(Stopping)
 	} else {
 		c._transitOrTerminate(Failed, result, Started, Stopping)
 	}
@@ -651,6 +669,13 @@ func (c *singleChain) Reset(gs string, height int64, blockHash []byte) error {
 
 func (c *singleChain) Logger() log.Logger {
 	return c.logger
+}
+
+func (c *singleChain) DoDBTask(task func(database db.Database)) {
+	c.dbLock.RLock()
+	defer c.dbLock.RUnlock()
+
+	task(c.database)
 }
 
 func NewChain(

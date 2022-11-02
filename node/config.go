@@ -9,6 +9,7 @@ import (
 
 	"github.com/icon-project/goloop/common/log"
 	"github.com/icon-project/goloop/module"
+	"github.com/icon-project/goloop/server"
 	"github.com/icon-project/goloop/server/jsonrpc"
 )
 
@@ -109,7 +110,9 @@ type RuntimeConfig struct {
 	EEInstances       int    `json:"eeInstances"`
 	RPCDefaultChannel string `json:"rpcDefaultChannel"`
 	RPCIncludeDebug   bool   `json:"rpcIncludeDebug"`
+	RPCRosetta        bool   `json:"rpcRosetta"`
 	RPCBatchLimit     int    `json:"rpcBatchLimit"`
+	WSMaxSession      int    `json:"wsMaxSession"`
 
 	FilePath string `json:"-"` // absolute path
 }
@@ -143,9 +146,10 @@ func (c *RuntimeConfig) save() error {
 
 func loadRuntimeConfig(baseDir string) (*RuntimeConfig, error) {
 	cfg := &RuntimeConfig{
-		EEInstances: DefaultEEInstances,
+		EEInstances:   DefaultEEInstances,
 		RPCBatchLimit: jsonrpc.DefaultBatchLimit,
-		FilePath:    path.Join(baseDir, "rconfig.json"),
+		FilePath:      path.Join(baseDir, "rconfig.json"),
+		WSMaxSession:  server.DefaultWSMaxSession,
 	}
 	if err := cfg.load(); err != nil {
 		if os.IsNotExist(err) {

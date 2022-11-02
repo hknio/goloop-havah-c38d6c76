@@ -15,6 +15,7 @@ import (
 	"github.com/icon-project/goloop/module"
 	"github.com/icon-project/goloop/service/contract"
 	"github.com/icon-project/goloop/service/state"
+	"github.com/icon-project/goloop/service/trace"
 )
 
 var (
@@ -120,6 +121,10 @@ func (cc *mockCallContext) SetBalance(address module.Address, amount *big.Int) {
 	as.SetBalance(amount)
 }
 
+func (cc *mockCallContext) FrameLogger() *trace.Logger {
+	return nil
+}
+
 func newMockCallContext() *mockCallContext {
 	return &mockCallContext{
 		accounts: make(map[string]*mockAccount),
@@ -160,6 +165,7 @@ func newSimplePlatformConfig(termPeriod, usdtPrice int64) *PlatformConfig {
 func newMockContextAndExtensionState(t *testing.T, cfg *PlatformConfig) (*mockCallContext, *ExtensionStateImpl) {
 	cc := newMockCallContext()
 	es := newMockExtensionState(t, cfg)
+	assert.Equal(t, cfg.TermPeriod.Value, es.GetTermPeriod())
 	return cc, es
 }
 
@@ -174,30 +180,42 @@ func goByCount(t *testing.T, count int64,
 	es *ExtensionStateImpl, mcc *mockCallContext, from module.Address) {
 	cc := NewCallContext(mcc, from)
 	is := es.GetIssueStart()
+	termPeriod := es.GetTermPeriod()
 
 	for i := int64(0); i < count; i++ {
 		mcc.height++
 		if hvhstate.IsIssueStarted(mcc.height, is) {
-			data := es.NewBaseTransactionData(mcc.height, is)
-			bs, err := json.Marshal(data)
-			assert.NoError(t, err)
+			_, blockIndex := hvhstate.GetTermSequenceAndBlockIndex(mcc.height, is, termPeriod)
+			if blockIndex == 0 {
+				// A baseTx is created only at the beginning of each term
+				data := es.NewBaseTransactionData(mcc.height, is)
+				bs, err := json.Marshal(data)
+				assert.NoError(t, err)
 
-			err = es.OnBaseTx(cc, bs)
-			assert.NoError(t, err)
+				err = es.OnBaseTx(cc, bs)
+				assert.NoError(t, err)
+			}
 		}
 	}
 }
 
 func checkRewardInfo(t *testing.T,
 	jso map[string]interface{},
-	height int64, total, remain, claimable *big.Int) {
+	height int64, expTotal, expRemain, expClaimable *big.Int) {
 	assert.Equal(t, height, jso["height"].(int64))
+	total, remain, claimable := getRewardInfoOf(jso)
+	assert.Zero(t, expTotal.Cmp(total))
+	assert.Zero(t, expRemain.Cmp(remain))
+	assert.Zero(t, expClaimable.Cmp(claimable))
+}
 
-	keys := []string{"total", "remain", "claimable"}
-	values := []*big.Int{total, remain, claimable}
-	for i, key := range keys {
-		assert.Zero(t, jso[key].(*big.Int).Cmp(values[i]))
-	}
+// getRewardInfoOf() returns total, remain and claimable values
+func getRewardInfoOf(jso map[string]interface{}) (*big.Int, *big.Int, *big.Int) {
+	return jso["total"].(*big.Int), jso["remain"].(*big.Int), jso["claimable"].(*big.Int)
+}
+
+func getPrivateClaimableRate(jso map[string]interface{}) (int64, int64) {
+	return jso["numerator"].(int64), jso["denominator"].(int64)
 }
 
 func calcNewIssueAmount(issueAmount *big.Int, rate *big.Rat) *big.Int {
@@ -412,8 +430,7 @@ func TestExtensionStateImpl_Reward1(t *testing.T) {
 
 // Case 2
 // private planet reward
-// privateLockup
-// privateReleaseCycle
+// No claimable reward if private claimable rate is zero
 func TestExtensionStateImpl_Reward2(t *testing.T) {
 	id := int64(1)
 	issueStart := int64(10)
@@ -454,35 +471,27 @@ func TestExtensionStateImpl_Reward2(t *testing.T) {
 	for i := 0; i < hvhmodule.DayPerYear; i++ {
 		ri0, err := es.GetRewardInfoOf(cc, id)
 		assert.NoError(t, err)
+		total0, remain0, claimable0 := getRewardInfoOf(ri0)
+		assert.Zero(t, claimable0.Sign())
 
 		assert.NoError(t, es.ReportPlanetWork(cc, id))
 
 		ri1, err := es.GetRewardInfoOf(cc, id)
-		reward := new(big.Int).Sub(ri1["total"].(*big.Int), ri0["total"].(*big.Int))
-		assert.Zero(t, issueAmount.Cmp(reward))
-		assert.Zero(t, ri1["claimable"].(*big.Int).Sign())
+		assert.NoError(t, err)
+		total1, remain1, claimable1 := getRewardInfoOf(ri1)
+		assert.Zero(t, claimable1.Sign())
+
+		assert.Zero(t, issueAmount.Cmp(new(big.Int).Sub(total1, total0)))
+		assert.Zero(t, issueAmount.Cmp(new(big.Int).Sub(remain1, remain0)))
 
 		goByCount(t, termPeriod, es, mcc, pm)
 	}
 
-	ri2, err := es.GetRewardInfoOf(cc, id)
-	total := ri2["total"].(*big.Int)
-	claimable := ri2["claimable"].(*big.Int)
-	locked := new(big.Int).Mul(total, big.NewInt(23))
-	locked.Div(locked, big.NewInt(24))
-	expected := new(big.Int).Sub(total, locked)
+	jso, err := es.GetPrivateClaimableRate()
 	assert.NoError(t, err)
-	assert.Zero(t, claimable.Cmp(expected))
-	assert.True(t, claimable.Sign() > 0)
-
-	// goByCount(t, termPeriod, es, mcc, pm)
-	// assert.NoError(t, es.ReportPlanetWork(cc, id))
-	//
-	// ri3, err := es.GetRewardInfoOf(cc, id)
-	// assert.NoError(t, err)
-	// claimable = ri3["claimable"].(*big.Int)
-	// total := ri3["total"].(*big.Int)
-	// es.Logger().Infof("total=%d claimable=%s", total, hex.EncodeToString(claimable.Bytes()))
+	num, denom := getPrivateClaimableRate(jso)
+	assert.Zero(t, int64(0), num)
+	assert.Equal(t, int64(hvhmodule.PrivateClaimableRate), denom)
 }
 
 // Case 3
@@ -553,23 +562,20 @@ func TestExtensionStateImpl_Reward3(t *testing.T) {
 // Case4
 // private planet
 // claim rewards during private release cycle
-func TestExtensionStateImpl_Reward_PrivateReleaseCycle(t *testing.T) {
+func TestExtensionStateImpl_Reward_With_PrivateClaimableRate(t *testing.T) {
 	var err error
 	id := int64(1)
 	issueStart := int64(10)
 	termPeriod := int64(4)
-	privateLockup := int64(10)
-	privateReleaseCycle := int64(5)
-	issueAmount := hvhmodule.BigIntInitIssueAmount
+	issueAmount := big.NewInt(1_000_000)
 	usdtPrice := toHVH(1) // 1 USDT == 10 HVH
+	repeat := int64(5)
 	owner := common.MustNewAddressFromString("hx2222")
 
 	stateCfg := hvhstate.StateConfig{
-		TermPeriod:          &common.HexInt64{Value: termPeriod},
-		PrivateLockup:       &common.HexInt64{Value: privateLockup},
-		PrivateReleaseCycle: &common.HexInt64{Value: privateReleaseCycle},
-		IssueAmount:         new(common.HexInt).SetValue(issueAmount),
-		USDTPrice:           new(common.HexInt).SetValue(usdtPrice),
+		TermPeriod:  &common.HexInt64{Value: termPeriod},
+		IssueAmount: new(common.HexInt).SetValue(issueAmount),
+		USDTPrice:   new(common.HexInt).SetValue(usdtPrice),
 	}
 	mcc, es := newMockContextAndExtensionState(t, &PlatformConfig{StateConfig: stateCfg})
 	mcc.height = 1
@@ -586,29 +592,138 @@ func TestExtensionStateImpl_Reward_PrivateReleaseCycle(t *testing.T) {
 	// Term 0
 	goByHeight(t, issueStart, es, mcc, nil)
 
-	err = es.ReportPlanetWork(cc, id)
+	// Go to the next term
+	goByCount(t, termPeriod, es, mcc, nil)
+
+	jso, err := es.GetRewardInfoOf(cc, id)
 	assert.NoError(t, err)
+	total, remain, claimable := getRewardInfoOf(jso)
+	assert.Zero(t, total.Sign())
+	assert.Zero(t, remain.Sign())
+	assert.Zero(t, claimable.Sign())
 
-	goByCount(t, termPeriod*privateLockup, es, mcc, nil)
+	termHeight := mcc.height
+	for i := int64(0); i < repeat; i++ {
+		// Go to the next term + 1 height
+		termHeight += termPeriod
+		goByHeight(t, termHeight+1, es, mcc, nil)
 
-	for i := int64(0); i < hvhmodule.PrivateReleaseDivision; i++ {
-		lockedReward := big.NewInt(hvhmodule.PrivateReleaseDivision - (i + 1))
-		lockedReward.Mul(lockedReward, issueAmount)
-		lockedReward.Div(lockedReward, big.NewInt(hvhmodule.PrivateReleaseDivision))
-		expectedToClaim := new(big.Int).Sub(issueAmount, lockedReward)
+		err = es.ReportPlanetWork(cc, id)
+		assert.NoError(t, err)
+
+		err = es.SetPrivateClaimableRate(i+1, repeat)
+		assert.NoError(t, err)
+
+		jso, err := es.GetRewardInfoOf(cc, id)
+		assert.NoError(t, err)
+		_, _, claimable = getRewardInfoOf(jso)
+		assert.True(t, claimable.Sign() > 0)
+
+		oldBalance := mcc.GetBalance(owner)
 
 		err = es.ClaimPlanetReward(cc, []int64{id})
 		assert.NoError(t, err)
 
 		balance := mcc.GetBalance(owner)
-		es.Logger().Debugf("i=%d expected=%d balance=%d", i, expectedToClaim, balance)
-		assert.Zero(t, expectedToClaim.Cmp(balance))
-
-		goByCount(t, termPeriod*privateReleaseCycle, es, mcc, nil)
+		assert.Zero(t, balance.Cmp(new(big.Int).Add(oldBalance, claimable)))
 	}
 
-	balance := cc.GetBalance(owner)
-	assert.Zero(t, issueAmount.Cmp(balance))
+	goByCount(t, 1, es, mcc, nil)
+
+	jso, err = es.GetPrivateClaimableRate()
+	assert.NoError(t, err)
+	num, denom := getPrivateClaimableRate(jso)
+	assert.Equal(t, repeat, num)
+	assert.Equal(t, repeat, denom)
+
+	claimed := new(big.Int).Mul(issueAmount, big.NewInt(repeat))
+	jso, err = es.GetRewardInfoOf(cc, id)
+	assert.NoError(t, err)
+	total, remain, claimable = getRewardInfoOf(jso)
+	assert.Zero(t, total.Cmp(claimed))
+	assert.Zero(t, remain.Sign())
+	assert.Zero(t, claimable.Sign())
+
+	balance := mcc.GetBalance(owner)
+	assert.Zero(t, balance.Cmp(claimed))
+}
+
+// Case5
+// Reversed PrivateClaimableRate
+// 2 planets: user planet(1), private planet(1), company planet(0)
+func TestExtensionSnapshotImpl_Reward5_ReversedPrivateClaimableRate(t *testing.T) {
+	var err error
+	id := int64(1)
+	issueStart := int64(10)
+	termPeriod := int64(4)
+	issueAmount := big.NewInt(100)
+	usdtPrice := toHVH(1) // 1 USDT == 10 HVH
+	owner := common.MustNewAddressFromString("hx2222")
+
+	stateCfg := hvhstate.StateConfig{
+		TermPeriod:  &common.HexInt64{Value: termPeriod},
+		IssueAmount: new(common.HexInt).SetValue(issueAmount),
+		USDTPrice:   new(common.HexInt).SetValue(usdtPrice),
+	}
+	mcc, es := newMockContextAndExtensionState(t, &PlatformConfig{StateConfig: stateCfg})
+	mcc.height = 1
+	cc := NewCallContext(mcc, owner)
+
+	err = es.StartRewardIssue(cc, issueStart)
+	assert.NoError(t, err)
+
+	priceInUSDT := big.NewInt(1)
+	priceInHVH := big.NewInt(1)
+	err = es.RegisterPlanet(cc, id, true, false, owner, priceInUSDT, priceInHVH)
+	assert.NoError(t, err)
+
+	// Term 0
+	goByHeight(t, issueStart, es, mcc, nil)
+
+	// Go to the next term
+	goByCount(t, termPeriod, es, mcc, nil)
+
+	jso, err := es.GetRewardInfoOf(cc, id)
+	assert.NoError(t, err)
+	total, remain, claimable := getRewardInfoOf(jso)
+	assert.Zero(t, total.Sign())
+	assert.Zero(t, remain.Sign())
+	assert.Zero(t, claimable.Sign())
+
+	err = es.SetPrivateClaimableRate(4, 5)
+	assert.NoError(t, err)
+
+	expRemains := []int64{100, 120, 220, 320, 420}
+	expClaimables := []int64{80, 0, 0, 0, 20}
+
+	for i := 0; i < 5; i++ {
+		goByCount(t, termPeriod, es, mcc, nil)
+
+		err = es.ReportPlanetWork(cc, id)
+		assert.NoError(t, err)
+
+		jso, err = es.GetRewardInfoOf(cc, id)
+		assert.NoError(t, err)
+		total, remain, claimable = getRewardInfoOf(jso)
+		es.Logger().Debugf(
+			"i=%d total=%d remain=%d claimable=%d", i, total, remain, claimable)
+		assert.Equal(t, issueAmount.Int64()*int64(i+1), total.Int64())
+		assert.Equal(t, expRemains[i], remain.Int64())
+		assert.Equal(t, expClaimables[i], claimable.Int64())
+
+		oldBalance := mcc.GetBalance(owner)
+
+		err = es.ClaimPlanetReward(cc, []int64{id})
+		assert.NoError(t, err)
+
+		balance := mcc.GetBalance(owner)
+		assert.Zero(t, balance.Cmp(new(big.Int).Add(oldBalance, claimable)))
+
+		if i == 0 {
+			err = es.SetPrivateClaimableRate(1, 5)
+			assert.NoError(t, err)
+		}
+	}
 }
 
 func TestExtensionStateImpl_DistributeFee(t *testing.T) {

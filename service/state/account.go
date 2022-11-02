@@ -118,6 +118,8 @@ const (
 	ExDepositInfo
 )
 
+var zeroBalance big.Int
+
 type accountStore interface {
 	Get(k []byte) ([]byte, error)
 }
@@ -500,14 +502,15 @@ func (s *accountSnapshotImpl) NextContract() ContractSnapshot {
 }
 
 func (s *accountSnapshotImpl) Store() trie.Immutable {
-	return s.store.(trie.Immutable)
+	store, _ := s.store.(trie.Immutable)
+	return store
 }
 
 func newAccountSnapshot(dbase db.Database) *accountSnapshotImpl {
 	return &accountSnapshotImpl{
 		accountData: accountData{
 			version:  AccountVersion,
-			balance:  new(big.Int),
+			balance:  &zeroBalance,
 			database: dbase,
 		},
 	}
@@ -784,7 +787,7 @@ func (s *accountStateImpl) Clear() {
 		accountData: accountData{
 			database: s.database,
 			version:  AccountVersion,
-			balance:  new(big.Int),
+			balance:  &zeroBalance,
 		},
 	}
 }
@@ -865,7 +868,7 @@ func (s *accountStateImpl) PaySteps(pc PayContext, steps *big.Int) (*big.Int, *b
 	return nil, nil, nil
 }
 
-func newAccountState(database db.Database, snapshot *accountSnapshotImpl, key []byte, useCache bool) AccountState {
+func newAccountState(database db.Database, snapshot AccountSnapshot, key []byte, useCache bool) AccountState {
 	s := &accountStateImpl{
 		accountData: accountData{
 			database: database,
@@ -879,7 +882,7 @@ func newAccountState(database db.Database, snapshot *accountSnapshotImpl, key []
 		}
 	} else {
 		s.version = AccountVersion
-		s.balance = new(big.Int)
+		s.balance = &zeroBalance
 	}
 	return s
 }

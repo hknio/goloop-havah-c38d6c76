@@ -29,7 +29,7 @@ subprojects {
 sourceSets.test.java.srcDirs = ["java"]
 
 dependencies {
-    implementation "org.msgpack:jackson-dataformat-msgpack:0.8.16"
+    implementation "org.msgpack:jackson-dataformat-msgpack:0.8.17"
     implementation "com.squareup.okhttp3:okhttp:3.11.0"
     implementation project(':sdk')
     implementation project(':api')

@@ -147,6 +147,10 @@ func (es *ExtensionStateImpl) GetIssueStart() int64 {
 	return es.state.GetIssueStart()
 }
 
+func (es *ExtensionStateImpl) GetTermPeriod() int64 {
+	return es.state.GetTermPeriod()
+}
+
 // NewBaseTransactionData creates data part of a baseTransaction
 func (es *ExtensionStateImpl) NewBaseTransactionData(height, issueStart int64) map[string]interface{} {
 	es.Logger().Debugf("NewBaseTransactionData() start: height=%d istart=%d", height, issueStart)
@@ -313,7 +317,7 @@ func (es *ExtensionStateImpl) ReportPlanetWork(cc hvhmodule.CallContext, id int6
 	}
 
 	if err = cc.Transfer(
-		hvhmodule.HooverFund, hvhmodule.PublicTreasury, hooverRequest); err != nil {
+		hvhmodule.HooverFund, hvhmodule.PublicTreasury, hooverRequest, module.Transfer); err != nil {
 		return err
 	}
 
@@ -407,7 +411,7 @@ func (es *ExtensionStateImpl) ClaimPlanetReward(cc hvhmodule.CallContext, ids []
 			es.Logger().Warnf("Failed to claim a reward for %d", id)
 		}
 		if reward != nil && reward.Sign() > 0 {
-			if err = cc.Transfer(hvhmodule.PublicTreasury, owner, reward); err != nil {
+			if err = cc.Transfer(hvhmodule.PublicTreasury, owner, reward, module.Claim); err != nil {
 				return nil
 			}
 			onRewardClaimedEvent(cc, owner, termSeq, id, reward)
@@ -454,10 +458,26 @@ func (es *ExtensionStateImpl) BurnCoin(cc hvhmodule.CallContext, amount *big.Int
 	if err != nil {
 		return err
 	}
-	onBurnedEvent(cc, from, amount, totalSupply)
+	onBurnedEvent(cc, state.SystemAddress, amount, totalSupply)
 	es.Logger().Debugf(
 		"BurnCoin() end: from=%s amount=%d ts=%d", from, amount, totalSupply)
 	return nil
+}
+
+func (es *ExtensionStateImpl) SetPrivateClaimableRate(numerator, denominator int64) error {
+	es.Logger().Debugf(
+		"SetPrivateClaimableRate() start: numerator=%d denominator=%d",
+		numerator, denominator)
+	defer es.Logger().Debugf("SetPrivateClaimableRate() end")
+	return es.state.SetPrivateClaimableRate(numerator, denominator)
+}
+
+func (es *ExtensionStateImpl) GetPrivateClaimableRate() (map[string]interface{}, error) {
+	num, denom := es.state.GetPrivateClaimableRate()
+	return map[string]interface{}{
+		"numerator":   num,
+		"denominator": denom,
+	}, nil
 }
 
 func GetExtensionStateFromWorldContext(wc state.WorldContext, logger log.Logger) *ExtensionStateImpl {

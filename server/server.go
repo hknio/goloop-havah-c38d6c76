@@ -23,6 +23,16 @@ const (
 	UrlAdmin          = "/admin"
 )
 
+type Config struct {
+	ServerAddress         string
+	JSONRPCDump           bool
+	JSONRPCIncludeDebug   bool
+	JSONRPCRosetta        bool
+	JSONRPCDefaultChannel string
+	JSONRPCBatchLimit     int
+	WSMaxSession          int
+}
+
 type Manager struct {
 	e                     *echo.Echo
 	addr                  string
@@ -32,6 +42,7 @@ type Manager struct {
 	mtx                   sync.RWMutex
 	jsonrpcDefaultChannel string
 	jsonrpcMessageDump    int32
+	jsonrpcRosetta        int32
 	jsonrpcIncludeDebug   int32
 	jsonrpcBatchLimit     int32
 	logger                log.Logger
@@ -39,11 +50,8 @@ type Manager struct {
 	mtr                   *metric.JsonrpcMetric
 }
 
-func NewManager(addr string,
-	jsonrpcDump bool,
-	jsonrpcIncludeDebug bool,
-	jsonrpcDefaultChannel string,
-	jsonrpcBatchLimit int,
+func NewManager(
+	config *Config,
 	wallet module.Wallet,
 	l log.Logger) *Manager {
 
@@ -62,19 +70,20 @@ func NewManager(addr string,
 	e.Logger.SetOutput(l.WriterLevel(log.DebugLevel))
 	m := &Manager{
 		e:                     e,
-		addr:                  addr,
+		addr:                  config.ServerAddress,
 		wallet:                wallet,
 		chains:                make(map[string]module.Chain),
-		wssm:                  newWSSessionManager(logger),
+		wssm:                  newWSSessionManager(logger, config.WSMaxSession),
 		mtx:                   sync.RWMutex{},
-		jsonrpcDefaultChannel: jsonrpcDefaultChannel,
-		jsonrpcBatchLimit:     int32(jsonrpcBatchLimit),
+		jsonrpcDefaultChannel: config.JSONRPCDefaultChannel,
+		jsonrpcBatchLimit:     int32(config.JSONRPCBatchLimit),
 		logger:                logger,
 		metricsHandler:        echo.WrapHandler(metric.PrometheusExporter()),
 		mtr:                   mtr,
 	}
-	m.SetMessageDump(jsonrpcDump)
-	m.SetIncludeDebug(jsonrpcIncludeDebug)
+	m.SetMessageDump(config.JSONRPCDump)
+	m.SetIncludeDebug(config.JSONRPCIncludeDebug)
+	m.SetRosetta(config.JSONRPCRosetta)
 	return m
 }
 
@@ -155,12 +164,24 @@ func (srv *Manager) IncludeDebug() bool {
 	return atomicLoad(&srv.jsonrpcIncludeDebug)
 }
 
+func (srv *Manager) SetRosetta(enable bool) {
+	atomicStore(&srv.jsonrpcRosetta, enable)
+}
+
+func (srv *Manager) Rosetta() bool {
+	return atomicLoad(&srv.jsonrpcRosetta)
+}
+
 func (srv *Manager) SetBatchLimit(limitOfBatch int) {
 	atomic.StoreInt32(&srv.jsonrpcBatchLimit, int32(limitOfBatch))
 }
 
 func (srv *Manager) BatchLimit() int {
 	return int(atomic.LoadInt32(&srv.jsonrpcBatchLimit))
+}
+
+func (srv *Manager) SetWSMaxSession(limit int) {
+	srv.wssm.SetMaxSession(limit)
 }
 
 func (srv *Manager) Start() error {
@@ -194,6 +215,7 @@ func (srv *Manager) RegisterAPIHandler(g *echo.Group) {
 		return func(ctx echo.Context) error {
 			ctx.Set("includeDebug", srv.IncludeDebug())
 			ctx.Set("batchLimit", srv.BatchLimit())
+			ctx.Set("rosetta", srv.Rosetta())
 			return next(ctx)
 		}
 	})
@@ -212,6 +234,14 @@ func (srv *Manager) RegisterAPIHandler(g *echo.Group) {
 	v3dbg.POST("", dmr.Handle, ChainInjector(srv))
 	v3dbg.POST("/", dmr.Handle, ChainInjector(srv))
 	v3dbg.POST("/:channel", dmr.Handle, ChainInjector(srv))
+
+	// Rosetta APIs
+	rmr := v3.RosettaMethodRepository(srv.mtr)
+	rosetta := rpc.Group("/rosetta")
+	rosetta.Use(srv.CheckRosetta(), JsonRpc(), Chunk())
+	rosetta.POST("", rmr.Handle, ChainInjector(srv))
+	rosetta.POST("/", rmr.Handle, ChainInjector(srv))
+	rosetta.POST("/:channel", rmr.Handle, ChainInjector(srv))
 
 	// group for websocket
 	ws := g.Group("")
@@ -233,6 +263,17 @@ func (srv *Manager) CheckDebug() echo.MiddlewareFunc {
 		return func(ctx echo.Context) error {
 			if !srv.IncludeDebug() {
 				return ctx.String(http.StatusNotFound, "rpc_debug is false")
+			}
+			return next(ctx)
+		}
+	}
+}
+
+func (srv *Manager) CheckRosetta() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(ctx echo.Context) error {
+			if !srv.Rosetta() {
+				return ctx.String(http.StatusNotFound, "rpc_rosetta is false")
 			}
 			return next(ctx)
 		}

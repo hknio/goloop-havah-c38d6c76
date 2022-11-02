@@ -337,16 +337,12 @@ func TestState_InitState(t *testing.T) {
 	cfg.TermPeriod = &common.HexInt64{Value: 100}
 	cfg.HooverBudget = common.NewHexInt(1_000_000)
 	cfg.IssueReductionCycle = &common.HexInt64{Value: 180}
-	cfg.PrivateLockup = &common.HexInt64{Value: 100}
-	cfg.PrivateReleaseCycle = &common.HexInt64{Value: 12}
 	cfg.USDTPrice = common.NewHexInt(200_000)
 
 	assert.NoError(t, state.InitState(cfg))
 	assert.Equal(t, cfg.TermPeriod.Value, state.GetTermPeriod())
 	assert.Zero(t, state.GetHooverBudget().Cmp(cfg.HooverBudget.Value()))
 	assert.Equal(t, cfg.IssueReductionCycle.Value, state.GetIssueReductionCycle())
-	assert.Equal(t, cfg.PrivateLockup.Value, state.getInt64(hvhmodule.VarPrivateLockup))
-	assert.Equal(t, cfg.PrivateReleaseCycle.Value, state.getInt64(hvhmodule.VarPrivateReleaseCycle))
 	assert.Zero(t, state.GetIssueReductionRate().Cmp(hvhmodule.BigRatIssueReductionRate))
 }
 
@@ -444,4 +440,78 @@ func TestState_ClaimPlanetReward(t *testing.T) {
 	reward, err := state.ClaimPlanetReward(id, height, owner)
 	assert.NoError(t, err)
 	assert.Zero(t, reward.Sign())
+}
+
+func TestState_SetPrivateClaimableRate(t *testing.T) {
+	var err error
+	var num, denom int64
+	var expNum, expDenom int64
+	state := newDummyState()
+
+	// Check default value
+	expNum = int64(0)
+	expDenom = int64(hvhmodule.PrivateClaimableRate)
+	num, denom = state.GetPrivateClaimableRate()
+	assert.Zero(t, num)
+	assert.Equal(t, expDenom, denom)
+
+	// Error cases
+	// num, denom
+	ins := [][]int64{
+		{0, 0},
+		{1, 0},
+		{-2, 10},
+		{2, -10},
+		{-3, -20},
+		{10, 5},
+		{10, 10001},
+		{10001, 10001},
+	}
+	for _, in := range ins {
+		err = state.SetPrivateClaimableRate(in[0], in[1])
+		assert.Error(t, err)
+
+		num, denom = state.GetPrivateClaimableRate()
+		assert.Zero(t, num)
+		assert.Equal(t, expDenom, denom)
+	}
+
+	ins = [][]int64{
+		{0, 100},
+		{1, 100},
+		{10000, 10000},
+		{23, 24},
+		{24, 24},
+	}
+	for _, in := range ins {
+		expNum, expDenom = in[0], in[1]
+		err = state.SetPrivateClaimableRate(expNum, expDenom)
+		assert.NoError(t, err)
+
+		num, denom = state.GetPrivateClaimableRate()
+		assert.Equal(t, expNum, num)
+		assert.Equal(t, expDenom, denom)
+	}
+}
+
+func TestGetTermSequenceAndBlockIndex(t *testing.T) {
+	termSeq, blockIndex := GetTermSequenceAndBlockIndex(5, 20, 10)
+	assert.True(t, termSeq < 0)
+	assert.True(t, blockIndex < 0)
+
+	termSeq, blockIndex = GetTermSequenceAndBlockIndex(20, 20, 10)
+	assert.Zero(t, termSeq)
+	assert.Zero(t, blockIndex)
+
+	termSeq, blockIndex = GetTermSequenceAndBlockIndex(21, 20, 10)
+	assert.Equal(t, int64(0), termSeq)
+	assert.Equal(t, int64(1), blockIndex)
+
+	termSeq, blockIndex = GetTermSequenceAndBlockIndex(30, 20, 10)
+	assert.Equal(t, int64(1), termSeq)
+	assert.Equal(t, int64(0), blockIndex)
+
+	termSeq, blockIndex = GetTermSequenceAndBlockIndex(34, 20, 10)
+	assert.Equal(t, int64(1), termSeq)
+	assert.Equal(t, int64(4), blockIndex)
 }

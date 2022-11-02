@@ -872,6 +872,13 @@ func (n *Node) Configure(key string, value string) error {
 			n.rcfg.RPCIncludeDebug = boolVal
 		}
 		n.srv.SetIncludeDebug(n.rcfg.RPCIncludeDebug)
+	case "rpcRosetta":
+		if boolVal, err := strconv.ParseBool(value); err != nil {
+			return errors.Wrapf(err, "invalid value type")
+		} else {
+			n.rcfg.RPCRosetta = boolVal
+		}
+		n.srv.SetRosetta(n.rcfg.RPCRosetta)
 	case "rpcBatchLimit":
 		if intVal, err := strconv.Atoi(value); err != nil {
 			return errors.Wrapf(err, "invalid value type")
@@ -879,6 +886,13 @@ func (n *Node) Configure(key string, value string) error {
 			n.rcfg.RPCBatchLimit = intVal
 		}
 		n.srv.SetBatchLimit(n.rcfg.RPCBatchLimit)
+	case "wsMaxSession":
+		if intVal, err := strconv.Atoi(value); err != nil {
+			return errors.Wrapf(err, "invalid value type")
+		} else {
+			n.rcfg.WSMaxSession = intVal
+		}
+		n.srv.SetWSMaxSession(n.rcfg.WSMaxSession)
 	default:
 		return errors.Errorf("not found key")
 	}
@@ -910,7 +924,16 @@ func NewNode(
 	if cfg.P2PListenAddr != "" {
 		_ = nt.SetListenAddress(cfg.P2PListenAddr)
 	}
-	srv := server.NewManager(cfg.RPCAddr, cfg.RPCDump, rcfg.RPCIncludeDebug, rcfg.RPCDefaultChannel, rcfg.RPCBatchLimit, w, l)
+	config := &server.Config{
+		ServerAddress:         cfg.RPCAddr,
+		JSONRPCDump:           cfg.RPCDump,
+		JSONRPCIncludeDebug:   rcfg.RPCIncludeDebug,
+		JSONRPCRosetta:        rcfg.RPCRosetta,
+		JSONRPCDefaultChannel: rcfg.RPCDefaultChannel,
+		JSONRPCBatchLimit:     rcfg.RPCBatchLimit,
+		WSMaxSession:          rcfg.WSMaxSession,
+	}
+	srv := server.NewManager(config, w, l)
 
 	ee, err := eeproxy.AllocEngines(l, strings.Split(cfg.Engines, ",")...)
 	if err != nil {
